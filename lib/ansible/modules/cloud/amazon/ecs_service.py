@@ -59,6 +59,10 @@ options:
         description:
           - The list of ELBs defined for this service
         required: false
+    service_registries:
+        description:
+          - The list of service discovery registries to assign to this service
+        required: false
     desired_count:
         description:
           - The count of how many instances of the service. This parameter is required when state=present
@@ -198,10 +202,35 @@ service:
             returned: always
             type: complex
             contains:
+                targetGroupArn:
+                    description: the name of the Elastic Load Balancing target group
+                    returned: always
+                    type: string
                 loadBalancerName:
                     description: the name
                     returned: always
                     type: string
+                containerName:
+                    description: The name of the container to associate with the load balancer.
+                    returned: always
+                    type: string
+                containerPort:
+                    description: The port on the container to associate with the load balancer.
+                    returned: always
+                    type: int
+        serviceRegistries:
+            description: A list of load balancer objects
+            returned: always
+            type: complex
+            contains:
+                registryArn:
+                    description: The Amazon Resource Name (ARN) of the service registry.
+                    returned: always
+                    type: string
+                port
+                    description: The port value used if your service discovery service specified an SRV record.
+                    returned: always
+                    type: int
                 containerName:
                     description: The name of the container to associate with the load balancer.
                     returned: always
@@ -376,13 +405,16 @@ class EcsServiceManager:
         if (expected['load_balancers'] or []) != existing['loadBalancers']:
             return False
 
+        if (expected['service_registries'] or []) != existing['serviceRegistries']:
+            return False
+
         if (expected['desired_count'] or 0) != existing['desiredCount']:
             return False
 
         return True
 
     def create_service(self, service_name, cluster_name, task_definition, load_balancers,
-                       desired_count, client_token, role, deployment_configuration,
+                       service_registries, desired_count, client_token, role, deployment_configuration,
                        placement_constraints, placement_strategy, network_configuration,
                        launch_type):
         params = dict(
@@ -390,6 +422,7 @@ class EcsServiceManager:
             serviceName=service_name,
             taskDefinition=task_definition,
             loadBalancers=load_balancers,
+            serviceRegistries=service_registries,
             desiredCount=desired_count,
             clientToken=client_token,
             role=role,
@@ -453,6 +486,7 @@ def main():
         cluster=dict(required=False, type='str'),
         task_definition=dict(required=False, type='str'),
         load_balancers=dict(required=False, default=[], type='list'),
+        service_registries=dict(required=False, default=[], type='list'),
         desired_count=dict(required=False, type='int'),
         client_token=dict(required=False, default='', type='str'),
         role=dict(required=False, default='', type='str'),
@@ -517,10 +551,25 @@ def main():
                 role = module.params['role']
                 clientToken = module.params['client_token']
                 loadBalancers = module.params['load_balancers']
+                serviceRegistries = module.params['service_registries']
+
+                for idx, value in enumerate(loadBalancers):
+                    if 'containerPort' in value:
+                        loadBalancers[idx]['containerPort'] = int(value['containerPort'])
+
+                for idx, value in enumerate(serviceRegistries):
+                    if 'containerPort' in value:
+                        loadBalancers[idx]['containerPort'] = int(value['containerPort'])
+                    if 'port' in value:
+                        loadBalancers[idx]['containerPort'] = int(value['containerPort'])
 
                 if update:
                     if (existing['loadBalancers'] or []) != loadBalancers:
                         module.fail_json(msg="It is not possible to update the load balancers of an existing service")
+
+                    if (existing['serviceRegistries'] or []) != serviceRegistries:
+                        module.fail_json(msg="It is not possible to update the service registries of an existing service")
+
                     # update required
                     response = service_mgr.update_service(module.params['name'],
                                                           module.params['cluster'],
@@ -529,15 +578,13 @@ def main():
                                                           deploymentConfiguration,
                                                           network_configuration)
                 else:
-                    for loadBalancer in loadBalancers:
-                        if 'containerPort' in loadBalancer:
-                            loadBalancer['containerPort'] = int(loadBalancer['containerPort'])
                     # doesn't exist. create it.
                     try:
                         response = service_mgr.create_service(module.params['name'],
                                                               module.params['cluster'],
                                                               module.params['task_definition'],
                                                               loadBalancers,
+                                                              serviceRegistries,
                                                               module.params['desired_count'],
                                                               clientToken,
                                                               role,
